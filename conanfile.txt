@@ -1,0 +1,24 @@
+[requires]
+imgui-sfml/2.1@bincrafters/stable
+stb/20190512@conan/stable
+
+# glm/0.9.9.5@g-truc/stable
+# entt/3.5.2
+
+# nlohmann_json/3.9.0
+spdlog/1.6.0
+magic_enum/0.6.6
+
+# CLI11/1.9.1@cliutils/stable
+# benchmark/1.5.2@_/_
+# Catch2/2.11.1@catchorg/stable
+
+[options]
+spdlog:no_exceptions=True
+sfml:audio=False
+sfml:network=False
+
+[generators]
+cmake
+
+[imports]

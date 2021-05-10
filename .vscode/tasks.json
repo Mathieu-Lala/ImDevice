@@ -1,0 +1,82 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "App - Debug - Generate",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-DCMAKE_INSTALL_PREFIX:PATH=install",
+                "-DCMAKE_BUILD_TYPE=Debug",
+                "-B",
+                "${workspaceRoot}/build/Debug",
+                "${workspaceRoot}"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+        },
+        {
+            "label": "App - Debug - Build",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "${workspaceRoot}/build/Debug"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+        },
+        {
+            "label": "App - Debug - Run",
+            "type": "shell",
+            "dependsOn": [
+                "Shader - Debug - Build"
+            ],
+            "options": {
+                "cwd": "${workspaceRoot}/build/Debug/src"
+            },
+            "command": "./app",
+            "args": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+        },
+        {
+            "label": "Analyzer - CppCheck - Generate",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-B",
+                "${workspaceRoot}/build/Debug",
+                "${workspaceRoot}",
+                "-DCMAKE_BUILD_TYPE=Debug",
+                "-DENABLE_CPPCHECK=True"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+        },
+        {
+            "label": "Analyzer - CppCheck - Run",
+            "type": "shell",
+            "dependsOn": [
+                "Analyzer - CppCheck - Generate"
+            ],
+            "command": "cmake",
+            "args": [
+                "--build",
+                "${workspaceRoot}/build/Debug",
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+        },
+    ]
+}
