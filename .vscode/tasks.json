@@ -33,9 +33,6 @@
         {
             "label": "App - Debug - Run",
             "type": "shell",
-            "dependsOn": [
-                "Shader - Debug - Build"
-            ],
             "options": {
                 "cwd": "${workspaceRoot}/build/Debug/src"
             },

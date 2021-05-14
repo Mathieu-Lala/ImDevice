@@ -1,9 +1,11 @@
 [requires]
-imgui-sfml/2.1@bincrafters/stable
+# imgui/1.82
+sfml/2.5.1@bincrafters/stable
+
 stb/20190512@conan/stable
 
 # glm/0.9.9.5@g-truc/stable
-# entt/3.5.2
+entt/3.5.2
 
 # nlohmann_json/3.9.0
 spdlog/1.6.0
@@ -17,6 +19,7 @@ magic_enum/0.6.6
 spdlog:no_exceptions=True
 sfml:audio=False
 sfml:network=False
+imgui-sfml:shared=True
 
 [generators]
 cmake

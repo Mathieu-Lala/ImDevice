@@ -1,137 +1,237 @@
-#include <optional>
-#include <chrono>
-
-#include <imgui-SFML.h>
-#include <imgui.h>
-
+#include <memory>
+#include <entt/entt.hpp>
 #include <SFML/Graphics.hpp>
-#include <SFML/Window.hpp>
-#include <SFML/OpenGL.hpp>
-#include <SFML/System/Clock.hpp>
-
 #include <spdlog/spdlog.h>
 
-#include <magic_enum.hpp>
+namespace ecs {
 
-using namespace std::chrono_literals;
 
-struct MouseState {
-    enum Button {
-        Left,
-        Right,
-        Middle,
-        XButton1,
-        XButton2,
+namespace component {
 
-        ButtonCount
-    };
-
-    enum WheelState { UP, DOWN };
-
-    bool is_in_window;
-    sf::Vector2i pos;
-
-    std::array<bool, Button::ButtonCount> button_state;
-
-    std::optional<WheelState> wheel_state;
-
-    auto set_wheel_state(float delta)
-    {
-        if (delta < 0) {
-            wheel_state = MouseState::WheelState::DOWN;
-        } else if (delta > 0) {
-            wheel_state = MouseState::WheelState::UP;
-        }
-
-        m_time_point_since_wheel_changed = std::chrono::system_clock::now();
-    }
-
-    auto tick()
-    {
-        const auto now = std::chrono::system_clock::now();
-
-        if (m_time_point_since_wheel_changed.time_since_epoch() + 100ms <= now.time_since_epoch()) {
-            wheel_state = {};
-        }
-    }
-
-private:
-    using timestamp = decltype(std::chrono::system_clock::now());
-    timestamp m_time_point_since_wheel_changed;
+struct Drawable {
+    sf::Drawable *component;
 };
 
-template<typename... Args>
-void text(const std::string_view fmt, Args &&... args)
+struct Transformable {
+    sf::Transformable *component;
+};
+
+struct Velocity {
+    sf::Vector2f component;
+};
+
+struct RigidBody {
+    sf::FloatRect component;
+};
+
+struct Position {
+    sf::Vector2f component;
+};
+
+struct Score {
+    int component;
+};
+
+} // namespace component
+
+
+namespace event {
+
+struct Collide {
+    entt::registry *world;
+    // const component::RigidBody *other;
+    entt::entity other;
+};
+
+struct UserInput {
+    entt::registry *world;
+    sf::Keyboard::Key key;
+};
+
+} // namespace event
+
+namespace system {
+
+auto position_on_update(entt::registry &world, entt::entity entity)
 {
-    ImGui::Text("%s", fmt::format(fmt, args...).data());
+    const auto position = world.get<component::Position>(entity);
+
+    const auto transformable = world.try_get<component::Transformable>(entity);
+    if (transformable != nullptr) { transformable->component->setPosition(position.component); }
+
+    const auto rigid_body = world.try_get<component::RigidBody>(entity);
+    if (rigid_body != nullptr) {
+        rigid_body->component.left = position.component.x;
+        rigid_body->component.top = position.component.y;
+
+        for (const auto &i : world.view<component::Position, component::RigidBody>()) {
+            if (i == entity) continue;
+
+            const auto &other_rigid_body = world.get<component::RigidBody>(i);
+
+            if (other_rigid_body.component.intersects(rigid_body->component)) {
+                world.ctx<entt::dispatcher *>()->trigger<event::Collide>(&world, i);
+                break;
+            }
+        }
+    }
 }
+
+} // namespace system
+
+namespace object {
+
+struct Ball {
+    entt::entity entity;
+    sf::CircleShape shape;
+
+    Ball(entt::registry &world, float window_size_x, float window_size_y) : entity{world.create()}
+    {
+        constexpr auto radius = 10;
+        shape = sf::CircleShape(radius);
+
+        world.emplace<component::Drawable>(entity, &shape);
+        world.emplace<component::Transformable>(entity, &shape);
+        world.emplace<component::RigidBody>(entity, sf::FloatRect{0, 0, radius * 2, radius * 2});
+        world.emplace<component::Position>(entity, sf::Vector2f{window_size_x / 2.0f, window_size_y / 2.0f});
+        world.emplace<component::Velocity>(entity, sf::Vector2f{0.1f, 0.08f});
+
+        world.ctx<entt::dispatcher *>()->sink<event::Collide>().connect<&Ball::on_collide>(*this);
+    }
+
+    auto on_collide(const event::Collide &event) -> void
+    {
+        if (event.world->has<entt::tag<"wall"_hs>>(event.other)) {
+            event.world->patch<component::Velocity>(
+                entity, [body = event.world->get<component::RigidBody>(event.other)](auto &vel) {
+                    if (body.component.height >= body.component.width) {
+                        vel.component.x *= -1.0f;
+                    } else {
+                        vel.component.y *= -1.0f;
+                    }
+                });
+        } else {
+            // todo : trigger increase score with a Game instance
+            event.world->patch<component::Score>(event.other, [](auto &score) { score.component--; });
+        }
+    }
+};
+
+template<std::size_t ID>
+struct Paddle {
+    entt::entity entity;
+    sf::RectangleShape shape;
+
+    void on_move(const event::UserInput &event)
+    {
+        event.world->patch<component::Position>(entity, [&event](auto &pos) {
+            constexpr auto speed = 5;
+            if constexpr (ID == 1) {
+                if (event.key == sf::Keyboard::R) {
+                    pos.component.y -= speed;
+                } else if (event.key == sf::Keyboard::F) {
+                    pos.component.y += speed;
+                }
+            } else {
+                if (event.key == sf::Keyboard::I) {
+                    pos.component.y -= speed;
+                } else if (event.key == sf::Keyboard::K) {
+                    pos.component.y += speed;
+                }
+            }
+        });
+    }
+
+    Paddle(entt::registry &world, float window_size_x, float window_size_y) : entity{world.create()}
+    {
+        constexpr auto size_x = 10;
+        constexpr auto size_y = 60;
+
+        shape = sf::RectangleShape(sf::Vector2f{size_x, size_y});
+
+        world.emplace<component::Drawable>(entity, &shape);
+        world.emplace<component::Transformable>(entity, &shape);
+        world.emplace<component::RigidBody>(entity, sf::FloatRect{0, 0, size_x, size_y});
+        world.emplace<component::Position>(
+            entity, sf::Vector2f{ID == 1 ? 0 : window_size_x - size_x, (window_size_y - size_y) / 2.0f});
+        world.emplace<entt::tag<"paddle"_hs>>(entity);
+
+        world.ctx<entt::dispatcher *>()->sink<event::UserInput>().connect<&Paddle::on_move>(*this);
+    }
+};
+
+struct Walls {
+    Walls(entt::registry &world, float window_size_x, float window_size_y)
+    {
+        struct S {
+            ecs::component::Position pos;
+            ecs::component::RigidBody body;
+        };
+        constexpr auto size = 10;
+        auto walls = std::to_array({
+            S{{{0, -size}}, {{0, 0, window_size_x, size}}},
+            S{{{window_size_x, 0}}, {{0, 0, size, window_size_y}}},
+            S{{{0, window_size_y}}, {{0, 0, window_size_x, size}}},
+            S{{{-size, 0}}, {{0, 0, size, window_size_y}}},
+        });
+        for (std::size_t i = 0; i != 4; i++) {
+            const auto wall = world.create();
+            world.emplace<ecs::component::RigidBody>(wall, walls[i].body);
+            world.emplace<ecs::component::Position>(wall, walls[i].pos);
+            world.emplace<entt::tag<"wall"_hs>>(wall);
+        }
+    }
+};
+
+} // namespace object
+
+} // namespace ecs
 
 int main()
 {
-    sf::RenderWindow window(sf::VideoMode(1080, 760), "ImDevice");
-    window.setFramerateLimit(60);
-    ImGui::SFML::Init(window);
+    constexpr auto window_size_x = 800;
+    constexpr auto window_size_y = 800;
 
-    sf::Texture texture;
-    if (!texture.loadFromFile("./asset/mouse-4/empty.png")) { return 1; }
+    sf::RenderWindow window{sf::VideoMode{window_size_x, window_size_y}, ""};
 
-    MouseState mouse_state;
+    entt::registry world{};
+    entt::dispatcher dispatcher{};
+    world.set<entt::dispatcher *>(&dispatcher);
 
-    sf::Clock delta_clock;
+    world.on_update<ecs::component::Position>().connect<&ecs::system::position_on_update>();
+    world.on_construct<ecs::component::Position>().connect<&ecs::system::position_on_update>();
+
+    ecs::object::Ball ball{world, window_size_x, window_size_y};
+    ecs::object::Paddle<1> paddle1{world, window_size_x, window_size_y};
+    ecs::object::Paddle<2> paddle2{world, window_size_x, window_size_y};
+    ecs::object::Walls walls{world, window_size_x, window_size_y};
+
+    sf::Clock clock{};
     while (window.isOpen()) {
-        // mouse_state.wheel_state = {};
+        const auto elapsed_time = static_cast<double>(clock.restart().asMicroseconds()) / 1000.0;
 
-        sf::Event event;
+        sf::Event event{};
         while (window.pollEvent(event)) {
-            ImGui::SFML::ProcessEvent(event);
-
             if (event.type == sf::Event::Closed) { window.close(); }
-
-            if (event.type == sf::Event::MouseButtonPressed) {
-                mouse_state.button_state[event.mouseButton.button] = true;
-            }
-            if (event.type == sf::Event::MouseButtonReleased) {
-                mouse_state.button_state[event.mouseButton.button] = false;
-            }
-            if (event.type == sf::Event::MouseEntered) { mouse_state.is_in_window = true; }
-            if (event.type == sf::Event::MouseLeft) { mouse_state.is_in_window = false; }
-            if (event.type == sf::Event::MouseMoved) {
-                mouse_state.pos = {event.mouseMove.x, event.mouseMove.y};
-            }
-            if (event.type == sf::Event::MouseWheelScrolled) {
-                mouse_state.set_wheel_state(event.mouseWheelScroll.delta);
+            if (event.type == sf::Event::KeyPressed) {
+                dispatcher.trigger<ecs::event::UserInput>(&world, event.key.code);
             }
         }
 
-        mouse_state.tick();
-        ImGui::SFML::Update(window, delta_clock.restart());
-
-        ImGui::Begin("Device Mouse");
-        if (!mouse_state.is_in_window) {
-            ImGui::Text("No mouse in the window");
-        } else {
-            text("position: (x: {}, y: {})", mouse_state.pos.x, mouse_state.pos.y);
-
-            for (auto i = 0u; i != MouseState::Button::ButtonCount; i++) {
-                const auto button = magic_enum::enum_cast<MouseState::Button>(i).value();
-                text("button::{}: {}", magic_enum::enum_name(button).data(), mouse_state.button_state[button]);
-            }
-            text(
-                "wheel: {}",
-                mouse_state.wheel_state.has_value()
-                    ? magic_enum::enum_name(mouse_state.wheel_state.value()).data()
-                    : "none");
-
-            ImGui::Image(texture);
+        for (const auto &e : world.view<ecs::component::Position, ecs::component::Velocity>()) {
+            const auto &vel = world.get<ecs::component::Velocity>(e);
+            world.patch<ecs::component::Position>(e, [&vel, &elapsed_time](auto &pos) {
+                pos.component += vel.component * static_cast<float>(elapsed_time);
+            });
         }
-        ImGui::End();
+
+        // world.view<ecs::component::Position>().each([&window](const auto &pos) {
+        //     spdlog::info("{{.x: {}, .y: {}}}", pos.component.x, pos.component.y);
+        // });
 
         window.clear();
-        ImGui::SFML::Render(window);
+        world.view<ecs::component::Drawable>().each(
+            [&window](const auto &drawable) { window.draw(*drawable.component); });
         window.display();
     }
-
-    ImGui::SFML::Shutdown();
-
-    return 0;
 }

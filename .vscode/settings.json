@@ -1,5 +1,8 @@
 {
     "files.associations": {
-        "chrono": "cpp"
+        "chrono": "cpp",
+        "functional": "cpp",
+        "memory": "cpp",
+        "istream": "cpp"
     }
 }
