@@ -3,8 +3,9 @@
 #include <SFML/Graphics.hpp>
 #include <spdlog/spdlog.h>
 
-namespace ecs {
+using namespace std::chrono_literals;
 
+namespace ecs {
 
 namespace component {
 
@@ -28,24 +29,35 @@ struct Position {
     sf::Vector2f component;
 };
 
-struct Score {
-    int component;
+// struct Score {
+//     int component;
+// };
+
+struct Clock {
+    std::chrono::milliseconds milliseconds_target;
+    std::chrono::milliseconds milliseconds_current;
+};
+
+struct ClockIsExecutable {
 };
 
 } // namespace component
-
 
 namespace event {
 
 struct Collide {
     entt::registry *world;
-    // const component::RigidBody *other;
     entt::entity other;
 };
 
 struct UserInput {
     entt::registry *world;
     sf::Keyboard::Key key;
+};
+
+struct ClockExecuted {
+    entt::registry *world;
+    entt::entity object;
 };
 
 } // namespace event
@@ -79,40 +91,81 @@ auto position_on_update(entt::registry &world, entt::entity entity)
 
 } // namespace system
 
+} // namespace ecs
+
+namespace game {
+
+namespace event {
+
+struct WallHit {
+    entt::registry *world;
+};
+
+} // namespace event
+
 namespace object {
 
 struct Ball {
     entt::entity entity;
     sf::CircleShape shape;
 
-    Ball(entt::registry &world, float window_size_x, float window_size_y) : entity{world.create()}
+    constexpr static float radius = 10;
+
+    Ball(entt::registry &world, float window_size_x, float window_size_y) :
+        entity{world.create()}, shape{radius}
     {
-        constexpr auto radius = 10;
-        shape = sf::CircleShape(radius);
+        world.emplace<ecs::component::Drawable>(entity, &shape);
+        world.emplace<ecs::component::Transformable>(entity, &shape);
+        world.emplace<ecs::component::RigidBody>(entity, sf::FloatRect{0, 0, radius * 2, radius * 2});
+        world.emplace<ecs::component::Clock>(entity, 2000ms, std::chrono::milliseconds::zero());
 
-        world.emplace<component::Drawable>(entity, &shape);
-        world.emplace<component::Transformable>(entity, &shape);
-        world.emplace<component::RigidBody>(entity, sf::FloatRect{0, 0, radius * 2, radius * 2});
-        world.emplace<component::Position>(entity, sf::Vector2f{window_size_x / 2.0f, window_size_y / 2.0f});
-        world.emplace<component::Velocity>(entity, sf::Vector2f{0.1f, 0.08f});
+        reset(world, window_size_x, window_size_y);
 
-        world.ctx<entt::dispatcher *>()->sink<event::Collide>().connect<&Ball::on_collide>(*this);
+        world.ctx<entt::dispatcher *>()->sink<ecs::event::Collide>().connect<&Ball::on_collide>(*this);
+        world.ctx<entt::dispatcher *>()->sink<ecs::event::ClockExecuted>().connect<&Ball::on_clock_execute>(*this);
     }
 
-    auto on_collide(const event::Collide &event) -> void
+    auto reset(entt::registry &world, float window_size_x, float window_size_y) -> void
     {
-        if (event.world->has<entt::tag<"wall"_hs>>(event.other)) {
-            event.world->patch<component::Velocity>(
-                entity, [body = event.world->get<component::RigidBody>(event.other)](auto &vel) {
+        world.emplace_or_replace<ecs::component::Position>(
+            entity, sf::Vector2f{window_size_x / 2.0f, window_size_y / 2.0f});
+
+        const auto vec = sf::Vector2f{
+            ((std::rand() & 1) ? 1.0f : -1.0f) * 0.01f,
+            ((std::rand() & 1) ? 1.0f : -1.0f) * static_cast<float>(std::rand() % 9 + 1) / 1000.0f};
+
+        spdlog::info("{}, {}", vec.x, vec.y);
+
+
+        world.emplace_or_replace<ecs::component::Velocity>(entity, vec);
+    }
+
+    auto on_clock_execute(const ecs::event::ClockExecuted &event) -> void
+    {
+        if (event.object != entity) return;
+
+        // spdlog::info("clock executed");
+
+        event.world->patch<ecs::component::Velocity>(entity, [](auto &vel) {
+            vel.component.x *= 1.01f;
+            vel.component.y *= 1.01f;
+        });
+    }
+
+    auto on_collide(const ecs::event::Collide &event) -> void
+    {
+        if (event.world->has<entt::tag<"trigger_wall_hit"_hs>>(event.other)) {
+            event.world->ctx<entt::dispatcher *>()->trigger<event::WallHit>(event.world);
+
+        } else {
+            event.world->patch<ecs::component::Velocity>(
+                entity, [body = event.world->get<ecs::component::RigidBody>(event.other)](auto &vel) {
                     if (body.component.height >= body.component.width) {
                         vel.component.x *= -1.0f;
                     } else {
                         vel.component.y *= -1.0f;
                     }
                 });
-        } else {
-            // todo : trigger increase score with a Game instance
-            event.world->patch<component::Score>(event.other, [](auto &score) { score.component--; });
         }
     }
 };
@@ -122,9 +175,9 @@ struct Paddle {
     entt::entity entity;
     sf::RectangleShape shape;
 
-    void on_move(const event::UserInput &event)
+    void on_move(const ecs::event::UserInput &event)
     {
-        event.world->patch<component::Position>(entity, [&event](auto &pos) {
+        event.world->patch<ecs::component::Position>(entity, [&event](auto &pos) {
             constexpr auto speed = 5;
             if constexpr (ID == 1) {
                 if (event.key == sf::Keyboard::R) {
@@ -142,21 +195,19 @@ struct Paddle {
         });
     }
 
-    Paddle(entt::registry &world, float window_size_x, float window_size_y) : entity{world.create()}
+    constexpr static float size_x = 10;
+    constexpr static float size_y = 60;
+
+    Paddle(entt::registry &world, float window_size_x, float window_size_y) :
+        entity{world.create()}, shape{sf::Vector2f{size_x, size_y}}
     {
-        constexpr auto size_x = 10;
-        constexpr auto size_y = 60;
-
-        shape = sf::RectangleShape(sf::Vector2f{size_x, size_y});
-
-        world.emplace<component::Drawable>(entity, &shape);
-        world.emplace<component::Transformable>(entity, &shape);
-        world.emplace<component::RigidBody>(entity, sf::FloatRect{0, 0, size_x, size_y});
-        world.emplace<component::Position>(
+        world.emplace<ecs::component::Drawable>(entity, &shape);
+        world.emplace<ecs::component::Transformable>(entity, &shape);
+        world.emplace<ecs::component::RigidBody>(entity, sf::FloatRect{0, 0, size_x, size_y});
+        world.emplace<ecs::component::Position>(
             entity, sf::Vector2f{ID == 1 ? 0 : window_size_x - size_x, (window_size_y - size_y) / 2.0f});
-        world.emplace<entt::tag<"paddle"_hs>>(entity);
 
-        world.ctx<entt::dispatcher *>()->sink<event::UserInput>().connect<&Paddle::on_move>(*this);
+        world.ctx<entt::dispatcher *>()->sink<ecs::event::UserInput>().connect<&Paddle::on_move>(*this);
     }
 };
 
@@ -178,17 +229,38 @@ struct Walls {
             const auto wall = world.create();
             world.emplace<ecs::component::RigidBody>(wall, walls[i].body);
             world.emplace<ecs::component::Position>(wall, walls[i].pos);
-            world.emplace<entt::tag<"wall"_hs>>(wall);
+            if (i & 1) { world.emplace<entt::tag<"trigger_wall_hit"_hs>>(wall); }
         }
     }
 };
 
 } // namespace object
 
-} // namespace ecs
+struct Pong {
+    float window_size_x;
+    float window_size_y;
+    object::Ball ball;
+    object::Paddle<1> paddle1;
+    object::Paddle<2> paddle2;
+    object::Walls walls;
+
+    Pong(entt::registry &world, float size_x, float size_y) :
+        window_size_x{size_x}, window_size_y{size_y}, ball{world, window_size_x, window_size_y},
+        paddle1{world, window_size_x, window_size_y}, paddle2{world, window_size_x, window_size_y},
+        walls{world, window_size_x, window_size_y}
+    {
+        world.ctx<entt::dispatcher *>()->sink<event::WallHit>().connect<&Pong::on_wall_hit>(*this);
+    }
+
+    void on_wall_hit(const event::WallHit &event) { ball.reset(*event.world, window_size_x, window_size_y); }
+};
+
+} // namespace game
 
 int main()
 {
+    std::srand(static_cast<std::uint32_t>(std::time(nullptr)));
+
     constexpr auto window_size_x = 800;
     constexpr auto window_size_y = 800;
 
@@ -197,18 +269,14 @@ int main()
     entt::registry world{};
     entt::dispatcher dispatcher{};
     world.set<entt::dispatcher *>(&dispatcher);
-
     world.on_update<ecs::component::Position>().connect<&ecs::system::position_on_update>();
     world.on_construct<ecs::component::Position>().connect<&ecs::system::position_on_update>();
 
-    ecs::object::Ball ball{world, window_size_x, window_size_y};
-    ecs::object::Paddle<1> paddle1{world, window_size_x, window_size_y};
-    ecs::object::Paddle<2> paddle2{world, window_size_x, window_size_y};
-    ecs::object::Walls walls{world, window_size_x, window_size_y};
+    game::Pong pong{world, window_size_x, window_size_y};
 
     sf::Clock clock{};
     while (window.isOpen()) {
-        const auto elapsed_time = static_cast<double>(clock.restart().asMicroseconds()) / 1000.0;
+        const auto elapsed_time = static_cast<double>(clock.restart().asMicroseconds()) / 100.0;
 
         sf::Event event{};
         while (window.pollEvent(event)) {
@@ -216,6 +284,23 @@ int main()
             if (event.type == sf::Event::KeyPressed) {
                 dispatcher.trigger<ecs::event::UserInput>(&world, event.key.code);
             }
+        }
+
+        for (const auto &i : world.view<ecs::component::Clock>()) {
+            auto &clock_component = world.get<ecs::component::Clock>(i);
+            clock_component.milliseconds_current +=
+                std::chrono::milliseconds{static_cast<std::int64_t>(elapsed_time)};
+            // spdlog::info("{}", elapsed_time);
+            // spdlog::info("{}", clock_component.milliseconds_current.count());
+            if (clock_component.milliseconds_current >= clock_component.milliseconds_target) {
+                clock_component.milliseconds_current = std::chrono::milliseconds::zero();
+                world.emplace<ecs::component::ClockIsExecutable>(i);
+            }
+        }
+
+        for (const auto &i : world.view<ecs::component::ClockIsExecutable>()) {
+            world.remove<ecs::component::ClockIsExecutable>(i);
+            dispatcher.trigger<ecs::event::ClockExecuted>(&world, i);
         }
 
         for (const auto &e : world.view<ecs::component::Position, ecs::component::Velocity>()) {
